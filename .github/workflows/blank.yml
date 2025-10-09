@@ -1,36 +1,276 @@
-# This is a basic workflow to help you get started with Actions
+name: Obfuscate and Deploy Code
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      uuid:
+        description: 'UUID'
+        required: true
+        default: 'fd80f56e-93f3-4c85-b2a8-c77216c509a7'
+      sub_name:
+        description: 'SUB_NAME'
+        required: false
+        default: ''
+      nserver:
+        description: 'NSERVER (Nezha Server)'
+        required: false
+        default: ''
+      nkey:
+        description: 'NKEY (Nezha Key)'
+        required: false
+        default: ''
+      tok:
+        description: 'TOK (Argo Token)'
+        required: false
+        default: ''
+      dom:
+        description: 'DOM (Argo Domain)'
+        required: false
+        default: ''
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+# 授予工作流写入权限
+permissions:
+  contents: write  # 允许创建 release 和推送代码
+  actions: read    # 允许读取 actions
+
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  obfuscate:
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
 
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Install javascript-obfuscator
+        run: npm install -g javascript-obfuscator
+
+      - name: Prepare source code
+        env:
+          SOURCE_CODE: ${{ secrets.SOURCE_CODE }}
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          # 直接从 Secret 写入源代码
+          cat > source.js << 'EOF'
+          ${{ secrets.SOURCE_CODE }}
+          EOF
+          
+          # 替换变量占位符
+          sed -i "s/{{UUID}}/${{ github.event.inputs.uuid }}/g" source.js
+          sed -i "s/{{SUB_NAME}}/${{ github.event.inputs.sub_name }}/g" source.js
+          sed -i "s/{{NSERVER}}/${{ github.event.inputs.nserver }}/g" source.js
+          sed -i "s/{{NKEY}}/${{ github.event.inputs.nkey }}/g" source.js
+          sed -i "s/{{TOK}}/${{ github.event.inputs.tok }}/g" source.js
+          sed -i "s/{{DOM}}/${{ github.event.inputs.dom }}/g" source.js
+
+      - name: Obfuscate code
+        run: |
+          javascript-obfuscator source.js \
+            --output obfuscated.js \
+            --compact true \
+            --control-flow-flattening true \
+            --control-flow-flattening-threshold 0.75 \
+            --dead-code-injection true \
+            --dead-code-injection-threshold 0.4 \
+            --debug-protection false \
+            --disable-console-output false \
+            --identifier-names-generator hexadecimal \
+            --log false \
+            --numbers-to-expressions true \
+            --rename-globals false \
+            --self-defending true \
+            --simplify true \
+            --split-strings true \
+            --split-strings-chunk-length 10 \
+            --string-array true \
+            --string-array-calls-transform true \
+            --string-array-encoding rc4 \
+            --string-array-index-shift true \
+            --string-array-rotate true \
+            --string-array-shuffle true \
+            --string-array-wrappers-count 2 \
+            --string-array-wrappers-chained-calls true \
+            --string-array-wrappers-parameters-max-count 4 \
+            --string-array-wrappers-type variable \
+            --string-array-threshold 0.75 \
+            --transform-object-keys true \
+            --unicode-escape-sequence false
+
+      - name: Clean up temporary files
+        run: |
+          # 删除源代码文件，只保留混淆后的
+          rm -f source.js
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          
+          # 复制混淆后的代码
+          cp obfuscated.js release/index.js
+          
+          # 创建 README
+          cat > release/README.md << EOF
+          # Obfuscated Code Build #${{ github.run_number }}
+          
+          ## 📦 Build Information
+          
+          - **Build Number**: ${{ github.run_number }}
+          - **Generated**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          - **Workflow**: ${{ github.workflow }}
+          
+          ## ⚙️ Configuration
+          
+          | Variable | Status |
+          |----------|--------|
+          | UUID | ✅ Configured |
+          | SUB_NAME | ${{ github.event.inputs.sub_name != '' && '✅ Configured' || '⚪ Not Set' }} |
+          | NSERVER | ${{ github.event.inputs.nserver != '' && '✅ Configured' || '⚪ Not Set' }} |
+          | NKEY | ${{ github.event.inputs.nkey != '' && '✅ Configured' || '⚪ Not Set' }} |
+          | TOK | ${{ github.event.inputs.tok != '' && '✅ Configured' || '⚪ Not Set' }} |
+          | DOM | ${{ github.event.inputs.dom != '' && '✅ Configured' || '⚪ Not Set' }} |
+          
+          ## 🔒 Security Features
+          
+          - ✅ High-strength obfuscation applied
+          - ✅ RC4 string encryption
+          - ✅ Control flow flattening
+          - ✅ Dead code injection
+          - ✅ Self-defending code
+          
+          ## 📥 Usage
+          
+          Download \`index.js\` and deploy to your serverless platform.
+          
+          ---
+          
+          Generated by GitHub Actions
+          EOF
+          
+          # 创建配置信息 JSON
+          cat > release/config.json << EOF
+          {
+            "build_number": ${{ github.run_number }},
+            "generated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "workflow_run_id": "${{ github.run_id }}",
+            "variables_configured": {
+              "UUID": true,
+              "SUB_NAME": ${{ github.event.inputs.sub_name != '' && 'true' || 'false' }},
+              "NSERVER": ${{ github.event.inputs.nserver != '' && 'true' || 'false' }},
+              "NKEY": ${{ github.event.inputs.nkey != '' && 'true' || 'false' }},
+              "TOK": ${{ github.event.inputs.tok != '' && 'true' || 'false' }},
+              "DOM": ${{ github.event.inputs.dom != '' && 'true' || 'false' }}
+            }
+          }
+          EOF
+          
+          # 打包所有文件
+          cd release
+          zip -r ../obfuscated-build-${{ github.run_number }}.zip *
+          cd ..
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          # 生成时间戳标签
+          TAG="build-$(date +%Y%m%d-%H%M%S)"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Generated tag: $TAG"
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Build #${{ github.run_number }} - $(date +%Y-%m-%d)"
+          body: |
+            ## 🎉 Obfuscated Code Release
+            
+            **Build Number**: #${{ github.run_number }}
+            **Generated**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+            
+            ### 📦 Files Included
+            
+            - `index.js` - Obfuscated main code
+            - `config.json` - Build configuration
+            - `README.md` - Documentation
+            - `obfuscated-build-${{ github.run_number }}.zip` - Complete package
+            
+            ### ⚙️ Configuration Status
+            
+            | Variable | Status |
+            |----------|--------|
+            | UUID | ✅ Configured |
+            | SUB_NAME | ${{ github.event.inputs.sub_name != '' && '✅ Configured' || '⚪ Not Set' }} |
+            | NSERVER | ${{ github.event.inputs.nserver != '' && '✅ Configured' || '⚪ Not Set' }} |
+            | NKEY | ${{ github.event.inputs.nkey != '' && '✅ Configured' || '⚪ Not Set' }} |
+            | TOK | ${{ github.event.inputs.tok != '' && '✅ Configured' || '⚪ Not Set' }} |
+            | DOM | ${{ github.event.inputs.dom != '' && '✅ Configured' || '⚪ Not Set' }} |
+            
+            ### 🔒 Security Features
+            
+            - ✅ High-strength code obfuscation
+            - ✅ RC4 string array encryption
+            - ✅ Control flow flattening
+            - ✅ Dead code injection
+            - ✅ Self-defending mechanisms
+            
+            ### 📥 Download
+            
+            Choose one of the following:
+            - Download individual files below
+            - Download the complete ZIP package
+            
+            ---
+            
+            🤖 Automatically generated by GitHub Actions
+          files: |
+            release/index.js
+            release/config.json
+            release/README.md
+            obfuscated-build-${{ github.run_number }}.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Artifacts (Backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: obfuscated-code-${{ github.run_number }}
+          path: release/
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          echo "## 🎉 构建和发布完成" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Release 信息" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: \`${{ steps.tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build**: #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release URL**: ${{ steps.create_release.outputs.url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ⚙️ 配置状态" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 变量 | 状态 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| UUID | ✅ 已配置 |" >> $GITHUB_STEP_SUMMARY
+          echo "| SUB_NAME | ${{ github.event.inputs.sub_name != '' && '✅ 已配置' || '⚪ 未设置' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| NSERVER | ${{ github.event.inputs.nserver != '' && '✅ 已配置' || '⚪ 未设置' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| NKEY | ${{ github.event.inputs.nkey != '' && '✅ 已配置' || '⚪ 未设置' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| TOK | ${{ github.event.inputs.tok != '' && '✅ 已配置' || '⚪ 未设置' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| DOM | ${{ github.event.inputs.dom != '' && '✅ 已配置' || '⚪ 未设置' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📥 下载方式" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. **Release 页面**: 访问 [Releases](${{ github.server_url }}/${{ github.repository }}/releases) 下载" >> $GITHUB_STEP_SUMMARY
+          echo "2. **Artifacts**: 在本次运行的 Artifacts 部分下载备份" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔒 安全信息" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ 源代码已从运行环境中清除" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ 代码已高强度混淆" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ 变量已安全注入" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Release 自动创建成功" >> $GITHUB_STEP_SUMMARY
