@@ -54,7 +54,7 @@ jobs:
           SOURCE_CODE: ${{ secrets.SOURCE_CODE }}
         run: |
           # 直接从 Secret 写入源代码
-          cat > source.js << 'EOF'
+          cat > source.js << EOF
           ${{ secrets.SOURCE_CODE }}
           EOF
           
